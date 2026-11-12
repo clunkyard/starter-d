@@ -50,6 +50,8 @@ private void drive(void*r,double throttle,double turn,double pitch){check(r,cy_d
 private void scan(void*r,double heading,double arc,double pitch){check(r,cy_scanner_heading(r,heading));check(r,cy_scanner_arc(r,arc));check(r,cy_scanner_pitch(r,pitch));}
 private void show(void*r,string text){check(r,cy_status_text(r,text.ptr,cast(uint)text.length));}
 private void show(void*r,string text,double value){show(r,text);check(r,cy_status_value(r,value));}
+// The arena's calibration kernel, xorshift-sqrt v1; safe to delete.
+private double calibrationWork(ulong work,ulong tick){ulong x=88172645463325252UL^tick;double sum=0;for(ulong i=0;i<work;i++){x^=x<<13;x^=x>>7;x^=x<<17;sum+=sqrt(cast(double)(x>>11));}return cast(double)((cast(ulong)floor(sum)+(x>>40))%1000000);}
 class Starter{
     bool freeFlight;
     void start(void*r){CyVec3 gravity;int is3d;check(r,cy_arena_gravity(r,&gravity));check(r,cy_match_is_3d(r,&is3d));freeFlight=is3d!=0&&gravity.z==0;}
@@ -71,6 +73,8 @@ class Starter{
         if(get!cy_battery_charge(r)<get!cy_battery_capacity(r)/4)check(r,cy_drive_throttle(r,get!cy_drive_get_throttle(r)*0.5));
         CyStorm storm;double margin;if(cy_nav_storm(r,&storm)==CY_OK&&cy_nav_storm_margin(r,&position,&margin)==CY_OK&&margin>-60){double away,delta,control;check(r,cy_angles_bearing_to(&storm.center,&position,&away));check(r,cy_angles_angle_diff(away,heading,&delta));check(r,cy_angles_clamp(delta/30,-1,1,&control));check(r,cy_drive_throttle(r,0.8));check(r,cy_drive_turn(r,control));}
         CyZone zone;if(cy_nav_zone(r,&zone)==CY_OK&&cy_nav_zone_margin(r,&position,&margin)==CY_OK&&margin<60){double bearing,climb=0,delta,turn,pitchTurn;check(r,cy_angles_bearing_to(&position,&zone.center,&bearing));if(zone.shape==CY_SHAPE_SPHERE)check(r,cy_angles_elevation_to(&position,&zone.center,&climb));check(r,cy_angles_angle_diff(bearing,heading,&delta));check(r,cy_angles_clamp(delta/30,-1,1,&turn));check(r,cy_angles_clamp((climb-pitch)/30,-1,1,&pitchTurn));drive(r,0.8,turn,pitchTurn);}
+        // Only the arena's rate calibration sends this; safe to delete.
+        double work;enum path="state.calibration.work";if(cy_raw_number(r,path.ptr,path.length,&work)==CY_OK&&work>=1)show(r,"WORK",calibrationWork(cast(ulong)work,cast(ulong)tick));
     }
 }
 void main(){auto robot=new Starter;run(&robot.turn,&robot.start);}
