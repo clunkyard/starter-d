@@ -7,7 +7,8 @@
 // clock: tick seconds remaining_ticks
 // arena: size gravity terrain_kind ground_height(x y)
 // me: health position velocity heading pitch roll angular_velocity
-//   attitude grounded altitude applied
+//   attitude grounded altitude applied hull_mounts to_mount(heading pitch)
+//   from_mount(heading pitch) mount_toward(point)
 // battery: charge capacity regen sustainable_drive compute
 //   drive_cost(fraction)
 // drive: hover_lift
@@ -29,7 +30,8 @@
 // score: me best armour
 // angles: normalize(degrees) angle_diff(target current)
 //   bearing_to(from to) elevation_to(from to) direction(heading pitch)
-//   distance(a b) clamp(value low high)
+//   distance(a b) to_chassis(heading pitch attitude)
+//   from_chassis(heading pitch attitude) clamp(value low high)
 // raw: number(path) text(path) has(path) flag(path) count(path) line()
 // Controls: drive.set(throttle turn pitch_turn)
 //   drive.forces(thrust strafe lift yaw_torque pitch_torque roll_torque brake)
@@ -51,13 +53,14 @@ private void scan(void*r,double heading,double arc,double pitch){check(r,cy_scan
 private void show(void*r,string text){check(r,cy_status_text(r,text.ptr,cast(uint)text.length));}
 private void show(void*r,string text,double value){show(r,text);check(r,cy_status_value(r,value));}
 class Starter{
-    bool freeFlight;
+    bool freeFlight;int dodgeTicks,dodges;
     void start(void*r){CyVec3 gravity;int is3d;check(r,cy_arena_gravity(r,&gravity));check(r,cy_match_is_3d(r,&is3d));freeFlight=is3d!=0&&gravity.z==0;}
     void turn(void*r){
         CyVec3 position;CyContact target;CyCue cue;CyScan last;check(r,cy_me_position(r,&position));check(r,cy_scanner_last(r,&last));
         const heading=get!cy_me_heading(r),pitch=get!cy_me_pitch(r);int tick;check(r,cy_clock_tick(r,&tick));check(r,cy_drive_brake(r,0.2));
         if(cy_sensors_nearest(r,&target)==CY_OK){
             const throttle=target.range>350?0.7:target.range<200?-0.4:0.2;drive(r,throttle,steer(target.bearing,heading),steer(target.elevation,pitch));scan(r,target.bearing,20,target.elevation);
+            // cy_gun_lead is the intercept if the target holds course.
             double power;check(r,cy_gun_power_for_flight_time(r,target.range,1,&power));CySolution aim;if(cy_gun_lead(r,&target,power,&aim)!=CY_OK){aim.heading=target.bearing;aim.pitch=target.elevation;}
             check(r,cy_gun_aim_heading(r,aim.heading));check(r,cy_gun_aim_pitch(r,aim.pitch));CyDirection now;check(r,cy_gun_aim_now(r,&now));double delta;check(r,cy_angles_angle_diff(aim.heading,now.heading,&delta));int canFire;check(r,cy_gun_can_fire(r,power,10,&canFire));
             if(abs(delta)<3&&abs(aim.pitch-now.pitch)<3&&canFire!=0){check(r,cy_gun_fire(r));check(r,cy_gun_power(r,power));}show(r,"TRACK",target.range);
@@ -67,6 +70,17 @@ class Starter{
             drive(r,0.7,steer(bearing,heading),steer(elevation,pitch));check(r,cy_scanner_arc_for_reach(r,distance+100,&arc));scan(r,bearing+across,arc,elevation+up);show(r,"CUE",distance);
         }else{
             double sweep;check(r,cy_angles_normalize(last.heading+36,&sweep));drive(r,0.5,0.33,steer(0,pitch));scan(r,sweep,40,freeFlight?((tick/10)%3-1)*35:0);show(r,"SEARCH");
+        }
+        // A simple dodge: vary it, or predict the shooter.
+        CyContact[32] cues;uint count;bool fired;
+        if(cy_sensors_cues(r,cues.ptr,cues.length,&count)==CY_OK)foreach(heard;cues[0..count])fired|=heard.source==CY_SOURCE_MUZZLE;
+        if(dodgeTicks==0&&fired){dodges++;dodgeTicks=10;}
+        if(dodgeTicks>0){
+            // Odd dodges go left, even ones right; turn +1 and strafe -1 go left.
+            const left=dodges%2==1;const double side=left?1:-1;int control;check(r,cy_match_control(r,&control));dodgeTicks--;
+            if(control==CY_CONTROL_FORCES){check(r,cy_drive_throttle(r,0.5));check(r,cy_drive_strafe(r,-side));}
+            else{check(r,cy_drive_throttle(r,1));check(r,cy_drive_turn(r,side));}
+            show(r,left?"dodge:left":"dodge:right",dodges);
         }
         if(get!cy_battery_charge(r)<get!cy_battery_capacity(r)/4)check(r,cy_drive_throttle(r,get!cy_drive_get_throttle(r)*0.5));
         CyStorm storm;double margin;if(cy_nav_storm(r,&storm)==CY_OK&&cy_nav_storm_margin(r,&position,&margin)==CY_OK&&margin>-60){double away,delta,control;check(r,cy_angles_bearing_to(&storm.center,&position,&away));check(r,cy_angles_angle_diff(away,heading,&delta));check(r,cy_angles_clamp(delta/30,-1,1,&control));check(r,cy_drive_throttle(r,0.8));check(r,cy_drive_turn(r,control));}
